@@ -5,8 +5,8 @@ export const FEATURED_LOCATIONS = [
     image: require('@/assets/images/randolph-hall.png'),
     description: 'Historic centerpiece of the College of Charleston campus',
     coordinate: {
-      latitude: 32.783832,
-      longitude: -79.937160
+      latitude: 32.78410178921882,
+      longitude: -79.93749222209023
     }
   },
   {
@@ -15,8 +15,8 @@ export const FEATURED_LOCATIONS = [
     image: require('@/assets/images/cistern-yard.png'),
     description: 'Iconic graduation venue surrounded by live oaks',
     coordinate: {
-      latitude: 32.783740,
-      longitude: -79.937080
+      latitude: 32.7839657124527,
+      longitude: -79.9373457191885
     }
   },
   {
@@ -25,8 +25,8 @@ export const FEATURED_LOCATIONS = [
     image: require('@/assets/images/library.png'), 
     description: 'Modern library facility with extensive resources',
     coordinate: {
-      latitude: 32.783608,
-      longitude: -79.937340
+      latitude: 32.78440841119022,
+      longitude: -79.93979557500803
     }
   }
 ] as const;
