@@ -30,7 +30,10 @@
       "expo-router"
     ],
     "experiments": {
-      "typedRoutes": true
-    }
+      "typedRoutes": true,
+      "newArchEnabled": true,
+      "tsconfigPaths": true
+    },
+    "sdkVersion": "52.0.0"
   }
 }

@@ -1,36 +1,34 @@
 import React, { useState } from 'react';
 import { StyleSheet, TouchableOpacity, TextInput } from 'react-native';
+import * as FileSystem from 'expo-file-system';
 
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import users from '../../assets/users.json';
 
 // This is our pseudo backend "database" implemented as a simple object
 // In a real app, this would be a proper backend server with a real database
 const pseudoBackend = {
-  // Store users with username as key and user data as value 
-  users: new Map(),
+  // Remove usersFilePath as we'll use the imported users directly
 
-  // Method to register/create a new user
-  registerUser: function(username: string, password: string) {
-    const userData = {
-      username,
-      password, // In a real app, this would be properly hashed
-      createdAt: new Date(),
-      // In a real backend, we'd have proper session tokens
-      sessionToken: Math.random().toString(36).substring(7)
-    };
-    this.users.set(username, userData);
-    return userData;
+  loadUsers: async function() {
+    try {
+      return users;
+    } catch (error) {
+      console.error('Error loading users:', error);
+      return [];
+    }
   },
 
-  // Method to get user data
-  getUser: function(username: string) {
-    return this.users.get(username);
+  // Get user data
+  getUser: async function(username: string) {
+    const users = await this.loadUsers();
+    return users.find((user: any) => user.username === username);
   },
 
-  // Method to check if user exists and validate password
-  validateUser: function(username: string, password: string) {
-    const user = this.users.get(username);
+  // Validate user
+  validateUser: async function(username: string, password: string) {
+    const user = await this.getUser(username);
     if (!user) return false;
     return user.password === password;
   }
@@ -43,29 +41,25 @@ export default function AccountScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     if (!username || !password) {
       setError('Please enter both username and password');
       return;
     }
 
-    let user;
-    if (!pseudoBackend.getUser(username)) {
-      // If user doesn't exist, register them
-      user = pseudoBackend.registerUser(username, password);
-      setCurrentUser(user);
-      setIsLoggedIn(true);
-      setError('');
-    } else {
+    try {
       // If user exists, validate credentials
-      if (pseudoBackend.validateUser(username, password)) {
-        user = pseudoBackend.getUser(username);
+      if (await pseudoBackend.validateUser(username, password)) {
+        const user = await pseudoBackend.getUser(username);
         setCurrentUser(user);
         setIsLoggedIn(true);
         setError('');
       } else {
-        setError('Invalid password');
+        setError('Invalid username or password');
       }
+    } catch (error) {
+      setError('An error occurred. Please try again.');
+      console.error(error);
     }
   };
 
@@ -79,6 +73,7 @@ export default function AccountScreen() {
             <TextInput
               style={styles.input}
               placeholder="Username"
+              placeholderTextColor="#666666"
               value={username}
               onChangeText={setUsername}
               autoCapitalize="none"
@@ -86,6 +81,7 @@ export default function AccountScreen() {
             <TextInput
               style={styles.input}
               placeholder="Password"
+              placeholderTextColor="#666666"
               value={password}
               onChangeText={setPassword}
               secureTextEntry
@@ -101,6 +97,16 @@ export default function AccountScreen() {
         ) : (
           <ThemedView>
             <ThemedText>Welcome, {currentUser.username}!</ThemedText>
+            <ThemedView style={styles.badgesContainer}>
+              <ThemedText style={styles.badgesTitle}>Your Badges:</ThemedText>
+              {currentUser.badges && currentUser.badges.length > 0 ? (
+                currentUser.badges.map((badge, index) => (
+                  <ThemedText key={index} style={styles.badge}>{badge}</ThemedText>
+                ))
+              ) : (
+                <ThemedText style={styles.noBadges}>No badges earned yet</ThemedText>
+              )}
+            </ThemedView>
             <TouchableOpacity 
               style={[styles.button, styles.loginButton]}
               onPress={() => {
@@ -141,6 +147,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 15,
     fontSize: 16,
+    color: '#000000'
   },
   button: {
     backgroundColor: '#2196F3',
@@ -161,5 +168,25 @@ const styles = StyleSheet.create({
     color: 'red',
     marginBottom: 10,
     textAlign: 'center'
-  }
+  },
+  badgesContainer: {
+    marginVertical: 20,
+    padding: 10,
+  },
+  badgesTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  badge: {
+    backgroundColor: '#e0e0e0',
+    padding: 8,
+    borderRadius: 5,
+    marginVertical: 5,
+    color: '#000000'
+  },
+  noBadges: {
+    fontStyle: 'italic',
+    color: '#666',
+  },
 });

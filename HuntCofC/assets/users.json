@@ -1,0 +1,12 @@
+[
+  {
+    "username": "mckittrickat@g.cofc.edu",
+    "password": "Flareblaster26",
+    "badges": ["Welcome", "Developer"]
+  },
+  {
+    "username": "admin",
+    "password": "admin123",
+    "badges": ["Welcome", "Admin"]
+  }
+] 
