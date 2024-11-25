@@ -1,40 +1,81 @@
-import React from 'react';
-import { View, Text, Button, StyleSheet, ScrollView, Image, TouchableOpacity } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
-import { FEATURED_LOCATIONS } from '../../constants/locations';
+import { db } from '../../firebaseConfig';
+import { collection, getDocs } from 'firebase/firestore';
 
-const Index = () => {
+type Location = {
+  id: string;
+  title: string;
+  description: string;
+  latitude: number;
+  longitude: number;
+};
+
+function Index() {
   const router = useRouter();
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchLocations = async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, 'locations'));
+      const locationData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        title: doc.data().title,
+        description: doc.data().description,
+        latitude: doc.data().latitude,
+        longitude: doc.data().longitude
+      }));
+      setLocations(locationData);
+    } catch (error) {
+      console.error('Error fetching locations:', error);
+    }
+  };
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchLocations();
+    setRefreshing(false);
+  }, []);
 
   const handleSeeAll = () => {
     router.push('./map');
   };
 
-  const handleLocationPress = (locationId: number) => {
-    console.log(`Location ${locationId} pressed`);
-    
+  const handleLocationPress = (location: Location) => {
     router.push({
-      pathname: "./location/[id]",
-      params: { id: locationId }
+      pathname: "./map",
+      params: { 
+        focusLat: location.latitude,
+        focusLong: location.longitude,
+        locationId: location.id
+      }
     });
   };
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView 
+      style={styles.container}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          colors={['#7a232f']}  // Android
+          tintColor="#7a232f"   // iOS
+        />
+      }
+    >
       <Text style={styles.title}>Featured Locations</Text>
       
-      {FEATURED_LOCATIONS.map(location => (
+      {locations.map(location => (
         <TouchableOpacity 
           key={location.id}
           style={styles.locationCard}
-          onPress={() => handleLocationPress(location.id)}
+          onPress={() => handleLocationPress(location)}
         >
-          <Image 
-            source={location.image}
-            style={styles.locationImage}
-          />
           <View style={styles.locationInfo}>
-            <Text style={styles.locationName}>{location.name}</Text>
+            <Text style={styles.locationName}>{location.title}</Text>
             <Text style={styles.locationDescription}>{location.description}</Text>
           </View>
         </TouchableOpacity>
@@ -48,7 +89,7 @@ const Index = () => {
       </TouchableOpacity>
     </ScrollView>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
@@ -104,7 +145,18 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
-  }
+  },
+  viewButton: {
+    backgroundColor: '#7a232f',
+    padding: 8,
+    borderRadius: 5,
+    flex: 1,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
 });
 
 export default Index;

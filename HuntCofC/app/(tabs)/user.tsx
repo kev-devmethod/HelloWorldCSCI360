@@ -1,126 +1,246 @@
-import React, { useState } from 'react';
-import { StyleSheet, TouchableOpacity, TextInput } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, TouchableOpacity, TextInput, ScrollView, RefreshControl } from 'react-native';
+import { initializeAuth, getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db } from '../../firebaseConfig';
 
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import users from '../../assets/users.json';
-
-// This is our pseudo backend "database" implemented as a simple object
-// In a real app, this would be a proper backend server with a real database
-const pseudoBackend = {
-  // Remove usersFilePath as we'll use the imported users directly
-
-  loadUsers: async function() {
-    try {
-      return users;
-    } catch (error) {
-      console.error('Error loading users:', error);
-      return [];
-    }
-  },
-
-  // Get user data
-  getUser: async function(username: string) {
-    const users = await this.loadUsers();
-    return users.find((user: any) => user.username === username);
-  },
-
-  // Validate user
-  validateUser: async function(username: string, password: string) {
-    const user = await this.getUser(username);
-    if (!user) return false;
-    return user.password === password;
-  }
-};
 
 export default function AccountScreen() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const auth = getAuth();
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setIsLoggedIn(true);
+        // Fetch user data from Firestore
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        if (userDoc.exists()) {
+          setCurrentUser({ ...userDoc.data(), email: user.email });
+        }
+      } else {
+        setIsLoggedIn(false);
+        setCurrentUser(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   const handleLogin = async () => {
-    if (!username || !password) {
-      setError('Please enter both username and password');
+    if (!email || !password) {
+      setError('Please enter both email and password');
       return;
     }
 
     try {
-      // If user exists, validate credentials
-      if (await pseudoBackend.validateUser(username, password)) {
-        const user = await pseudoBackend.getUser(username);
-        setCurrentUser(user);
-        setIsLoggedIn(true);
-        setError('');
-      } else {
-        setError('Invalid username or password');
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+      
+      // Fetch user data from Firestore
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      if (userDoc.exists()) {
+        setCurrentUser({ ...userDoc.data(), email: user.email });
       }
-    } catch (error) {
-      setError('An error occurred. Please try again.');
-      console.error(error);
+      
+      setIsLoggedIn(true);
+      setError('');
+    } catch (error: any) {
+      switch (error.code) {
+        case 'auth/invalid-email':
+          setError('Invalid email address');
+          break;
+        case 'auth/user-not-found':
+        case 'auth/wrong-password':
+          setError('Invalid email or password');
+          break;
+        default:
+          setError('An error occurred. Please try again.');
+          console.error(error);
+      }
     }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      setIsLoggedIn(false);
+      setEmail('');
+      setPassword('');
+      setError('');
+      setCurrentUser(null);
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  };
+
+  const handleRegister = async () => {
+    if (!email || !password) {
+      setError('Please enter both email and password');
+      return;
+    }
+
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+      
+      // Create user document in Firestore using email
+      await setDoc(doc(db, 'users', user.uid), {
+        displayName: email.split('@')[0],
+        email: user.email,
+        badges: [],
+        joinDate: new Date().toISOString()
+      });
+      
+      setIsLoggedIn(true);
+      setError('');
+    } catch (error: any) {
+      switch (error.code) {
+        case 'auth/email-already-in-use':
+          setError('Email already registered');
+          break;
+        case 'auth/invalid-email':
+          setError('Invalid email address');
+          break;
+        case 'auth/weak-password':
+          setError('Password is too weak');
+          break;
+        default:
+          setError('Registration failed. Please try again.');
+          console.error(error);
+      }
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    if (auth.currentUser) {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      if (userDoc.exists()) {
+        setCurrentUser({ ...userDoc.data(), email: auth.currentUser.email });
+      }
+    }
+    setRefreshing(false);
   };
 
   return (
     <ThemedView style={styles.container}>
-      <ThemedText type="title" style={styles.title}>Account</ThemedText>
+      <ScrollView
+        refreshControl={
+          isLoggedIn ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#7a232f']}
+              tintColor="#7a232f"
+            />
+          ) : undefined
+        }
+      >
+        <ThemedText type="title" style={styles.title}>Account</ThemedText>
 
-      <ThemedView style={styles.inputContainer}>
-        {!isLoggedIn ? (
-          <>
-            <TextInput
-              style={styles.input}
-              placeholder="Username"
-              placeholderTextColor="#666666"
-              value={username}
-              onChangeText={setUsername}
-              autoCapitalize="none"
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              placeholderTextColor="#666666"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
-            {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
-            <TouchableOpacity 
-              style={styles.button}
-              onPress={handleLogin}
-            >
-              <ThemedText style={styles.buttonText}>Sign In</ThemedText>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <ThemedView>
-            <ThemedText>Welcome, {currentUser.username}!</ThemedText>
-            <ThemedView style={styles.badgesContainer}>
-              <ThemedText style={styles.badgesTitle}>Your Badges:</ThemedText>
-              {currentUser.badges && currentUser.badges.length > 0 ? (
-                currentUser.badges.map((badge, index) => (
-                  <ThemedText key={index} style={styles.badge}>{badge}</ThemedText>
-                ))
+        <ThemedView style={styles.inputContainer}>
+          {!isLoggedIn && (
+            <>
+              {isRegistering ? (
+                <>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Email"
+                    placeholderTextColor="#666666"
+                    value={email}
+                    onChangeText={setEmail}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Password"
+                    placeholderTextColor="#666666"
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry
+                  />
+                  {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
+                  <TouchableOpacity 
+                    style={styles.button}
+                    onPress={handleRegister}
+                  >
+                    <ThemedText style={styles.buttonText}>Register</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.button, styles.secondaryButton]}
+                    onPress={() => setIsRegistering(false)}
+                  >
+                    <ThemedText style={styles.buttonText}>Back to Login</ThemedText>
+                  </TouchableOpacity>
+                </>
               ) : (
-                <ThemedText style={styles.noBadges}>No badges earned yet</ThemedText>
+                <>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Email"
+                    placeholderTextColor="#666666"
+                    value={email}
+                    onChangeText={setEmail}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Password"
+                    placeholderTextColor="#666666"
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry
+                  />
+                  {error ? <ThemedText style={styles.error}>{error}</ThemedText> : null}
+                  <TouchableOpacity 
+                    style={styles.button}
+                    onPress={handleLogin}
+                  >
+                    <ThemedText style={styles.buttonText}>Sign In</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    onPress={() => setIsRegistering(true)}
+                  >
+                    <ThemedText style={styles.registerText}>Don't have an account? Register here</ThemedText>
+                  </TouchableOpacity>
+                </>
               )}
+            </>
+          )}
+          {isLoggedIn ? (
+            <ThemedView>
+              <ThemedText>Welcome, {currentUser?.email}!</ThemedText>
+              <ThemedView style={styles.badgesContainer}>
+                <ThemedText style={styles.badgesTitle}>Your Badges:</ThemedText>
+                {currentUser?.badges && currentUser.badges.length > 0 ? (
+                  currentUser.badges.map((badge: string, index: number) => (
+                    <ThemedText key={index} style={styles.badge}>{badge}</ThemedText>
+                  ))
+                ) : (
+                  <ThemedText style={styles.noBadges}>No badges earned yet</ThemedText>
+                )}
+              </ThemedView>
+              <TouchableOpacity 
+                style={[styles.button, styles.loginButton]}
+                onPress={handleSignOut}
+              >
+                <ThemedText style={styles.buttonText}>Sign Out</ThemedText>
+              </TouchableOpacity>
             </ThemedView>
-            <TouchableOpacity 
-              style={[styles.button, styles.loginButton]}
-              onPress={() => {
-                setIsLoggedIn(false);
-                setUsername('');
-                setPassword('');
-                setError('');
-              }}
-            >
-              <ThemedText style={styles.buttonText}>Sign Out</ThemedText>
-            </TouchableOpacity>
-          </ThemedView>
-        )}
-      </ThemedView>
+          ) : null}
+        </ThemedView>
+      </ScrollView>
     </ThemedView>
   );
 }
@@ -188,5 +308,14 @@ const styles = StyleSheet.create({
   noBadges: {
     fontStyle: 'italic',
     color: '#666',
+  },
+  secondaryButton: {
+    backgroundColor: '#666',
+    marginTop: 10,
+  },
+  registerText: {
+    color: '#2196F3',
+    textAlign: 'center',
+    marginTop: 10,
   },
 });
