@@ -97,6 +97,7 @@ export default function AccountScreen() {
         displayName: email.split('@')[0],
         email: user.email,
         badges: [],
+        isAdmin: false,
         joinDate: new Date().toISOString()
       });
       

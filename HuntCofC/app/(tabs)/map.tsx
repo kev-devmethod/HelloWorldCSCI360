@@ -5,13 +5,13 @@ import { MapRadius } from '../../components/MapRadius';
 import { BadgeNotification } from '../../components/BadgeNotification';
 import { checkLocationAndAwardBadge, getDistance } from '../../utils/locationBadges';
 import * as Location from 'expo-location';
-import { collection, getDocs, addDoc, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, addDoc, onSnapshot, getDoc, doc } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
-import { getAuth } from 'firebase/auth';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 
 interface LocationData {
   id: string;
@@ -42,6 +42,7 @@ export default function MapScreen() {
   const mapRef = useRef<MapView>(null);
   const [selectedLocation, setSelectedLocation] = useState<LocationData | null>(null);
   const router = useRouter();
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Fetch locations from Firebase
   useEffect(() => {
@@ -120,10 +121,14 @@ export default function MapScreen() {
   };
 
   useEffect(() => {
-    const locationCheck = setInterval(checkNearbyLocations, 30000);
-    checkNearbyLocations(); // Initial check
+    // Initial check
+    checkNearbyLocations();
+    
+    // Reduce frequency of location checks (from 30000 to 60000 ms)
+    const locationCheck = setInterval(checkNearbyLocations, 60000); // Check every minute instead of every 30 seconds
+    
     return () => clearInterval(locationCheck);
-  }, [locations]); // Add locations as dependency
+  }, [locations]);
 
   useEffect(() => {
     let headingSubscription: Location.LocationSubscription;
@@ -215,6 +220,23 @@ export default function MapScreen() {
     }
   };
 
+  useEffect(() => {
+    const auth = getAuth();
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        // Check admin status whenever auth state changes
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        if (userDoc.exists()) {
+          setIsAdmin(userDoc.data().isAdmin === true);
+        }
+      } else {
+        setIsAdmin(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   return (
     <View style={styles.container}>
       {newBadge && (
@@ -235,9 +257,13 @@ export default function MapScreen() {
         }}
         showsUserLocation={true}
         followsUserLocation={true}
-        minZoomLevel={14}
-        rotateEnabled={true}
+        minZoomLevel={12}
+        maxZoomLevel={20}
+        rotateEnabled={false}
         moveOnMarkerPress={false}
+        userLocationFastestInterval={5000}
+        zoomEnabled={true}
+        zoomControlEnabled={true}
       >
         {userLocation && (
           <MapRadius
@@ -281,12 +307,14 @@ export default function MapScreen() {
         </View>
       )}
 
-      <TouchableOpacity 
-        style={styles.addButton}
-        onPress={() => setIsFormVisible(true)}
-      >
-        <Ionicons name="add" size={30} color="white" />
-      </TouchableOpacity>
+      {isAdmin && (
+        <TouchableOpacity 
+          style={styles.addButton}
+          onPress={() => setIsFormVisible(true)}
+        >
+          <Ionicons name="add" size={30} color="white" />
+        </TouchableOpacity>
+      )}
 
       <Modal
         visible={isFormVisible}
