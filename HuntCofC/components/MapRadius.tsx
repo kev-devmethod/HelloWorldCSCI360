@@ -18,6 +18,7 @@ export const MapRadius = ({ latitude, longitude, radius }: MapRadiusProps) => {
       fillColor="rgba(66, 133, 244, 0.2)"
       strokeColor="rgba(66, 133, 244, 0.5)"
       strokeWidth={2}
+      zIndex={2}
     />
   );
 }; 

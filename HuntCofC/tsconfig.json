@@ -4,8 +4,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["*"],
-      "@constants/*": ["app/constants/*"],
-      "@components/*": ["app/components/*"]
+      "@constants/*": ["constants/*"],
+      "@components/*": ["components/*"]
     }
   },
   "include": [

@@ -1,65 +1,71 @@
 import React, { useState, useEffect, useRef } from 'react';
 import MapView, { Marker, Callout } from 'react-native-maps';
-import { StyleSheet, View, Image, TouchableOpacity, Modal, TextInput, Text, Switch } from 'react-native';
+import { StyleSheet, View, TouchableOpacity, Modal, Text, Alert } from 'react-native';
 import { MapRadius } from '../../components/MapRadius';
 import { BadgeNotification } from '../../components/BadgeNotification';
 import { checkLocationAndAwardBadge, getDistance } from '../../utils/locationBadges';
 import * as Location from 'expo-location';
-import { collection, getDocs, addDoc, onSnapshot, getDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, onSnapshot, getDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
-import { Alert } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
-
-interface LocationData {
-  id: string;
-  title: string;
-  latitude: number;
-  longitude: number;
-  description: string;
-  isNearby?: boolean;
-}
+import { LocationInputForm } from '../../components/LocationInputForm';
+import { LocationData } from '../../types/location';
+import { calculateTimeRemaining, formatDate, getTodayFormatted, handleExpiredLocation } from '../../utils/timeUtils';
+import { LinearGradient } from 'expo-linear-gradient';
 
 export default function MapScreen() {
-  const [userLocation, setUserLocation] = useState<null | {
-    latitude: number;
-    longitude: number;
-  }>(null);
+  const [userLocation, setUserLocation] = useState<null | { latitude: number; longitude: number; }>(null);
   const [newBadge, setNewBadge] = useState<string | null>(null);
   const [locations, setLocations] = useState<LocationData[]>([]);
-  const [userHeading, setUserHeading] = useState<number>(0);
   const [isFormVisible, setIsFormVisible] = useState(false);
   const [newLocation, setNewLocation] = useState({
     name: '',
     description: '',
     latitude: '',
-    longitude: ''
+    longitude: '',
+    eventDate: getTodayFormatted(),
+    startTime: '12:00',
+    startPeriod: 'AM',
+    duration: '1'
   });
   const [nearbyLocations, setNearbyLocations] = useState<Set<string>>(new Set());
+  const [selectedLocation, setSelectedLocation] = useState<LocationData | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [inactiveMessage, setInactiveMessage] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<Location.LocationGeocodedLocation[]>([]);
+  const [currentZoom, setCurrentZoom] = useState(15);
+  
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
-  const [selectedLocation, setSelectedLocation] = useState<LocationData | null>(null);
   const router = useRouter();
-  const [isAdmin, setIsAdmin] = useState(false);
 
   // Fetch locations from Firebase
   useEffect(() => {
     const locationsCollection = collection(db, 'locations');
     
     // Set up real-time listener
-    const unsubscribe = onSnapshot(locationsCollection, (snapshot) => {
-      const locationList = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as LocationData[];
+    const unsubscribe = onSnapshot(locationsCollection, async (snapshot) => {
+      const locationList = [] as LocationData[];
+      
+      for (const doc of snapshot.docs) {
+        const location = { id: doc.id, ...doc.data() } as LocationData;
+        const timeInfo = location.startTime ? 
+          calculateTimeRemaining(location.startTime, location.duration) : null;
+
+        if (timeInfo?.isExpired) {
+          await handleExpiredLocation(location);
+        } else {
+          locationList.push(location);
+        }
+      }
+      
       setLocations(locationList);
     }, (error) => {
       console.error('Error listening to locations:', error);
     });
 
-    // Cleanup subscription on unmount
     return () => unsubscribe();
   }, []);
 
@@ -130,31 +136,27 @@ export default function MapScreen() {
     return () => clearInterval(locationCheck);
   }, [locations]);
 
-  useEffect(() => {
-    let headingSubscription: Location.LocationSubscription;
-
-    const startHeadingUpdates = async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-
-      headingSubscription = await Location.watchHeadingAsync((heading) => {
-        setUserHeading(heading.magHeading);
-      });
-    };
-
-    startHeadingUpdates();
-    return () => {
-      headingSubscription?.remove();
-    };
-  }, []);
-
   const handleSubmit = async () => {
     try {
+      // Convert 12-hour format to 24-hour format
+      const startHour = newLocation.startTime.split(':')[0];
+      const startMinute = newLocation.startTime.split(':')[1] || '00';
+      
+      // Convert to 24-hour format
+      let start24Hour = parseInt(startHour);
+      if (newLocation.startPeriod === 'PM' && start24Hour !== 12) start24Hour += 12;
+      if (newLocation.startPeriod === 'AM' && start24Hour === 12) start24Hour = 0;
+      
+      // Create date string
+      const startDateTime = `${newLocation.eventDate} ${start24Hour.toString().padStart(2, '0')}:${startMinute}`;
+
       const locationData = {
         title: newLocation.name,
         description: newLocation.description,
         latitude: Number(newLocation.latitude),
-        longitude: Number(newLocation.longitude)
+        longitude: Number(newLocation.longitude),
+        startTime: startDateTime,
+        duration: parseInt(newLocation.duration)
       };
 
       await addDoc(collection(db, 'locations'), locationData);
@@ -163,7 +165,11 @@ export default function MapScreen() {
         name: '', 
         description: '', 
         latitude: '', 
-        longitude: ''
+        longitude: '',
+        eventDate: getTodayFormatted(),
+        startTime: '12:00',
+        startPeriod: 'AM',
+        duration: '1'
       });
     } catch (error) {
       console.error('Error adding location:', error);
@@ -205,21 +211,6 @@ export default function MapScreen() {
     setSelectedLocation(location);
   };
 
-  // Add this function
-  const formatDate = (text: string) => {
-    // Remove any non-numeric characters
-    const numbers = text.replace(/\D/g, '');
-    
-    // Add slashes automatically
-    if (numbers.length <= 2) {
-      return numbers;
-    } else if (numbers.length <= 4) {
-      return numbers.slice(0, 2) + '/' + numbers.slice(2);
-    } else {
-      return numbers.slice(0, 2) + '/' + numbers.slice(2, 4) + '/' + numbers.slice(4, 8);
-    }
-  };
-
   useEffect(() => {
     const auth = getAuth();
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -246,6 +237,12 @@ export default function MapScreen() {
         />
       )}
       
+      {inactiveMessage && (
+        <View style={styles.toastContainer}>
+          <Text style={styles.toastText}>{inactiveMessage}</Text>
+        </View>
+      )}
+      
       <MapView 
         ref={mapRef}
         style={styles.map}
@@ -255,11 +252,15 @@ export default function MapScreen() {
           latitudeDelta: 0.01,
           longitudeDelta: 0.01,
         }}
+        onRegionChange={(region) => {
+          // Calculate zoom level from latitudeDelta
+          const zoom = Math.round(Math.log(360 / region.latitudeDelta) / Math.LN2);
+          setCurrentZoom(zoom);
+        }}
         showsUserLocation={true}
         followsUserLocation={true}
         minZoomLevel={12}
         maxZoomLevel={20}
-        rotateEnabled={false}
         moveOnMarkerPress={false}
         userLocationFastestInterval={5000}
         zoomEnabled={true}
@@ -273,32 +274,107 @@ export default function MapScreen() {
           />
         )}
         
-        {locations.map(location => (
-          <Marker
-            key={location.id}
-            coordinate={{
-              latitude: location.latitude,
-              longitude: location.longitude,
-            }}
-            title={location.title}
-            description={location.description}
-            onPress={() => handleMarkerPress(location)}
-          >
-            <Callout>
-              <View style={styles.calloutContainer}>
-                <Text style={styles.calloutTitle}>{location.title}</Text>
-                <Text style={styles.calloutDescription}>{location.description}</Text>
+        {locations.map(location => {
+          const timeInfo = location.startTime ? calculateTimeRemaining(location.startTime, location.duration) : null;
+          const isActive = timeInfo?.isActive;
+          const isUpcoming = timeInfo && !timeInfo.isActive && !timeInfo.isExpired;
+          const isExpired = timeInfo?.isExpired;
+
+          return (
+            <Marker
+              key={location.id}
+              coordinate={{
+                latitude: location.latitude,
+                longitude: location.longitude,
+              }}
+              onPress={() => handleMarkerPress(location)}
+              zIndex={0}
+              tracksViewChanges={false}
+              anchor={{ x: 0.5, y: 1 }}
+            >
+              <View style={[
+                styles.markerContainer,
+                {
+                  transform: [{ scale: Math.max(0.5, Math.min(1, currentZoom / 15)) }]
+                }
+              ]}>
+                <View style={[
+                  styles.titleContainer,
+                  { backgroundColor: isUpcoming ? '#666666' : 'white' }
+                ]}>
+                  <Ionicons 
+                    name="location" 
+                    size={18}
+                    color={isUpcoming ? 'white' : '#7a232f'}
+                    style={styles.titleIcon}
+                  />
+                  <Text style={[
+                    styles.markerTitle,
+                    isUpcoming && { color: 'white' }
+                  ]}>{location.title}</Text>
+                </View>
+                <View style={[
+                  styles.markerBox,
+                  { backgroundColor: '#666666' }
+                ]}>
+                  {timeInfo && isActive && (
+                    <View
+                      style={[
+                        StyleSheet.absoluteFill,
+                        {
+                          width: `${(timeInfo.totalSeconds / (location.duration * 60)) * 100}%`,
+                          backgroundColor: '#2196F3',
+                          borderRadius: 8,
+                        }
+                      ]}
+                    />
+                  )}
+                  <Ionicons name="time" size={14} color="white" />
+                  <View style={styles.timeTextContainer}>
+                    <Text style={styles.timeText}>
+                      {isActive ? 'Time left: ' : 
+                       isUpcoming ? 'Active in: ' : 
+                       'Expired'}
+                      {!isExpired && (
+                        <>
+                          {timeInfo.days > 0 ? `${timeInfo.days}d ` : ''}
+                          {timeInfo.hours > 0 ? `${timeInfo.hours}h` : ''}
+                          {timeInfo.minutes > 0 ? ` ${timeInfo.minutes}m` : ''}
+                        </>
+                      )}
+                    </Text>
+                  </View>
+                </View>
               </View>
-            </Callout>
-          </Marker>
-        ))}
+            </Marker>
+          );
+        })}
       </MapView>
 
       {selectedLocation && nearbyLocations.has(selectedLocation.id) && (
         <View style={styles.claimBadgeContainer}>
           <TouchableOpacity 
-            style={styles.claimButton}
-            onPress={() => claimBadge(selectedLocation)}
+            style={[
+              styles.claimButton,
+              { backgroundColor: '#7a232f' }  // Return to original maroon color
+            ]}
+            onPress={() => {
+              const timeInfo = selectedLocation.startTime ? 
+                calculateTimeRemaining(selectedLocation.startTime, selectedLocation.duration) : null;
+              
+              if (!timeInfo?.isActive) {
+                const message = timeInfo ? `${timeInfo.isExpired ? 'Event has ended' : `Available in: ${
+                  timeInfo.days ? `${timeInfo.days}d ` : ''
+                }${timeInfo.hours ? `${timeInfo.hours}h ` : ''
+                }${timeInfo.minutes ? `${timeInfo.minutes}m ` : ''
+                }${timeInfo.seconds}s`}` : 'Event not available';
+                
+                setInactiveMessage(message);
+                setTimeout(() => setInactiveMessage(null), 2000);
+                return;
+              }
+              claimBadge(selectedLocation);
+            }}
           >
             <Text style={styles.claimButtonText}>
               Claim {selectedLocation.title} Badge
@@ -322,59 +398,27 @@ export default function MapScreen() {
         transparent={true}
       >
         <View style={styles.modalContainer}>
-          <View style={styles.formContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Location Name"
-              placeholderTextColor="#444"
-              value={newLocation.name}
-              onChangeText={(text) => setNewLocation({...newLocation, name: text})}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Description"
-              placeholderTextColor="#444"
-              value={newLocation.description}
-              onChangeText={(text) => setNewLocation({...newLocation, description: text})}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Latitude"
-              placeholderTextColor="#444"
-              keyboardType="numeric"
-              value={newLocation.latitude}
-              onChangeText={(text) => setNewLocation({...newLocation, latitude: text})}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Longitude"
-              placeholderTextColor="#444"
-              keyboardType="numeric"
-              value={newLocation.longitude}
-              onChangeText={(text) => setNewLocation({...newLocation, longitude: text})}
-            />
-            
-            <TouchableOpacity
-              style={[styles.button, styles.locationButton]}
-              onPress={useCurrentLocation}
-            >
-              <Text style={styles.buttonText}>Use Current Location</Text>
-            </TouchableOpacity>
-            <View style={styles.buttonContainer}>
-              <TouchableOpacity 
-                style={[styles.button, styles.cancelButton]}
-                onPress={() => setIsFormVisible(false)}
-              >
-                <Text style={styles.buttonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.button, styles.submitButton]}
-                onPress={handleSubmit}
-              >
-                <Text style={styles.buttonText}>Submit</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          <LocationInputForm
+            newLocation={newLocation}
+            setNewLocation={setNewLocation}
+            onSubmit={async (locationData) => {
+              await addDoc(collection(db, 'locations'), locationData);
+              setIsFormVisible(false);
+              setNewLocation({ 
+                name: '', 
+                description: '', 
+                latitude: '', 
+                longitude: '',
+                eventDate: getTodayFormatted(),
+                startTime: '12:00',
+                startPeriod: 'AM',
+                duration: '1'
+              });
+            }}
+            onClose={() => setIsFormVisible(false)}
+            useCurrentLocation={useCurrentLocation}
+            formatDate={formatDate}
+          />
         </View>
       </Modal>
     </View>
@@ -409,13 +453,56 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.5)',
+    padding: 16,
   },
   formContainer: {
-    width: '80%',
     backgroundColor: '#fff',
-    padding: 20,
-    borderRadius: 10,
+    width: '85%',
+    maxHeight: '45%',
+    borderRadius: 25,
+    overflow: 'hidden',
     elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  timeContainer: {
+    marginBottom: 15,
+  },
+  inputLabel: {
+    fontSize: 16,
+    color: '#222',
+    marginBottom: 5,
+    marginTop: 10,
+  },
+  timePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+    borderRadius: 8,
+    marginBottom: 10,
+  },
+  timePickerContainer: {
+    flex: 2,
+    height: 100,
+  },
+  periodPickerContainer: {
+    flex: 1.5,
+    height: 100,
+  },
+  timePicker: {
+    height: 100,
+  },
+  periodPicker: {
+    height: 100,
+  },
+  timeColon: {
+    fontSize: 24,
+    marginHorizontal: 5,
   },
   input: {
     borderWidth: 1,
@@ -425,43 +512,31 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     color: '#222',
   },
-  buttonContainer: {
+  toggleContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
     marginTop: 10,
   },
-  button: {
-    padding: 10,
-    borderRadius: 5,
-    width: '45%',
-    alignItems: 'center',
-  },
-  locationButton: {
-    backgroundColor: '#2196F3',
-    marginBottom: 10,
-    width: '100%',
-  },
-  submitButton: {
-    backgroundColor: '#7a232f',
-  },
-  cancelButton: {
-    backgroundColor: '#666',
-  },
-  buttonText: {
-    color: '#fff',
-    fontWeight: 'bold',
+  toggleLabel: {
+    fontSize: 16,
+    color: '#222',
   },
   calloutContainer: {
-    minWidth: 200,
     padding: 10,
+    minWidth: 120,
   },
   calloutTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 5,
+    color: '#000',
+    textAlign: 'center',
   },
-  calloutDescription: {
-    marginBottom: 10,
+  calloutTime: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
   },
   claimBadgeContainer: {
     position: 'absolute',
@@ -471,47 +546,97 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   claimButton: {
-    backgroundColor: '#7a232f',
+    backgroundColor: '#666666',
     padding: 15,
     borderRadius: 10,
     width: '100%',
     alignItems: 'center',
+    overflow: 'hidden',
   },
   claimButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: 'bold',
   },
-  toggleContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  markerContainer: {
     alignItems: 'center',
-    marginBottom: 10,
+    width: 140,
   },
-  toggleLabel: {
-    fontSize: 16,
-    color: '#222',
+  titleContainer: {
+    backgroundColor: 'white',
+    padding: 2,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    marginBottom: 2,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.1)',
+    alignItems: 'center',
+    flexDirection: 'column',
+    minWidth: 100,
+    maxWidth: 140,
   },
-  durationContainer: {
-    marginBottom: 10,
+  titleIcon: {
+    marginBottom: 2,
+    position: 'absolute',
+    top: -18,
+    zIndex: 1,
   },
-  durationLabel: {
-    fontSize: 16,
-    color: '#222',
-    marginBottom: 5,
+  markerTitle: {
+    color: '#000',
+    fontSize: 11,
+    fontWeight: '900',
+    textAlign: 'center',
   },
-  pickerContainer: {
+  markerBox: {
     flexDirection: 'row',
-    backgroundColor: '#f0f0f0',
-    borderRadius: 5,
+    alignItems: 'center',
+    padding: 2,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    backgroundColor: '#666666',
+    overflow: 'hidden',
+    width: '85%',
+    alignSelf: 'center',
   },
-  picker: {
-    flex: 1,
-    height: 100,
+  timeTextContainer: {
+    marginLeft: 2,
   },
-  inputText: {
-    color: '#222',
-    fontSize: 16,
+  timeText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  toastContainer: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    padding: 10,
+    borderRadius: 8,
+    zIndex: 999,
+    alignItems: 'center',
+  },
+  toastText: {
+    color: 'white',
+    fontSize: 14,
+    textAlign: 'center',
   },
 });
 
